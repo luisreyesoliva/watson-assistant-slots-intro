@@ -14,136 +14,141 @@
  * limitations under the License.
  */
 
-'use strict';
+ 'use strict';
 
-require('dotenv').config({
-  silent: true
-});
-
-var WatsonConversationSetup = require('./lib/watson-conversation-setup');
-var DEFAULT_NAME = 'watson-conversation-slots-intro';
-var fs = require('fs'); // file system for loading JSON
-var AssistantV1 = require('ibm-watson/assistant/v1');
-const { getAuthenticatorFromEnvironment } = require('ibm-watson/auth');
-
-var express = require('express'); // app server
-var bodyParser = require('body-parser'); // parser for post requests
-
-var app = express();
-
-// Bootstrap application settings
-app.use(express.static('./public')); // load UI from public folder
-app.use(bodyParser.json());
-
-var workspaceID; // workspaceID will be set when the workspace is created or validated.
-
-// Set to false if you want the app to not immediately fail.
-// App will come up and ask user to provide proper Watson Assistant credentials.
-const failOnMissingCredentials = true;
-
-// Authentication relies on env settings
-let auth;
-let initError = false;
-let conversation;
-
-try {
-  auth = getAuthenticatorFromEnvironment('CONVERSATION');
-
-  conversation = new AssistantV1({
-    version: '2022-01-10',
-    authenticator: auth
-  });
-
-  var conversationSetup = new WatsonConversationSetup(conversation);
-
-  // handle issue with proper syntax of json file
-  // Assistant tooling for export uses 'dialog_nodes', but SDK requires 'dialogNodes'
-  var workspaceJson = JSON.parse(fs.readFileSync('data/watson-pizzeria.json'));
-  if ('dialog_nodes' in workspaceJson && !('dialogNodes' in workspaceJson)) {
-    workspaceJson.dialogNodes = workspaceJson.dialog_nodes;
-  }
-  var conversationSetupParams = { default_name: DEFAULT_NAME, workspace_json: workspaceJson };
-  conversationSetup.setupConversationWorkspace(conversationSetupParams, (err, data) => {
-    if (err) {
-      //handleSetupError(err);
-      console.log('Setup Error: ' + err);
-    } else {
-      console.log('Assistant is ready!');
-      workspaceID = data;
-    }
-  });
-} catch (e) {
-  console.log('Assistant initialization error: ' + e);
-  if (failOnMissingCredentials) {
-    throw(e);
-  } else {
-    console.log('Will continue with limited functionality');
-    initError = true;
-  }
-}
-
-// Endpoint to be call from the client side
-app.post('/api/message', async (req, res) => {
-
-  if (initError) {
-    return res.json({
-      output: {
-        text: 'Watson Assistant credentials are invalid. Please add/verify them and try again.'
-      }
-    });
-  }
-  else if (!workspaceID) {
-    return res.json({
-      output: {
-        text: 'Assistant initialization in progress. Please try again.'
-      }
-    });
-  }
-
-  var payload = {
-    workspaceId: workspaceID,
-    context: req.body.context || {},
-    input: req.body.input || {}
-  };
-  // Send the input to the conversation service
-  let result = await conversation.message(payload);
-  if (result.status != 200) {
-      return res.status(result.status || 500).json(result.statusText);
-  }
-  return res.json(updateMessage(payload, result));
-});
-
-/**
- * Updates the response text using the intent confidence
- * @param  {Object} input The request to the Assistant service
- * @param  {Object} response The response from the Assistant service
- * @return {Object}          The response with the updated message
- */
-function updateMessage(input, response) {
-  var responseText = null;
-  var result = response.result;
-  if (!result.output) {
-    result.output = {};
-  } else {
-    return result;
-  }
-  if (result.intents && result.intents[0]) {
-    var intent = result.intents[0];
-    // Depending on the confidence of the response the app can return different messages.
-    // The confidence will vary depending on how well the system is trained. The service will always try to assign
-    // a class/intent to the input. If the confidence is low, then it suggests the service is unsure of the
-    // user's intent . In these cases it is usually best to return a disambiguation message
-    // ('I did not understand your intent, please rephrase your question', etc..)
-    if (intent.confidence >= 0.75) {
-      responseText = 'I understood your intent was ' + intent.intent;
-    } else if (intent.confidence >= 0.5) {
-      responseText = 'I think your intent was ' + intent.intent;
-    } else {
-      responseText = 'I did not understand your intent';
-    }
-  }
-  result.output.text = responseText;
-  return result;
-}
-
-module.exports = app;
+ require('dotenv').config({
+   silent: true
+ });
+ 
+ var WatsonConversationSetup = require('./lib/watson-conversation-setup');
+ var DEFAULT_NAME = 'watson-conversation-slots-intro';
+ var fs = require('fs'); // file system for loading JSON
+ var AssistantV1 = require('ibm-watson/assistant/v1');
+ //const { getAuthenticatorFromEnvironment } = require('ibm-watson/auth');
+ const { IamAuthenticator } = require('ibm-watson/auth'); //watson Oauth
+ 
+ var express = require('express'); // app server
+ var bodyParser = require('body-parser'); // parser for post requests
+ 
+ var app = express();
+ 
+ // Bootstrap application settings
+ app.use(express.static('./public')); // load UI from public folder
+ app.use(bodyParser.json());
+ 
+ var workspaceID; // workspaceID will be set when the workspace is created or validated.
+ 
+ // Set to false if you want the app to not immediately fail.
+ // App will come up and ask user to provide proper Watson Assistant credentials.
+ const failOnMissingCredentials = true;
+ 
+ // Authentication relies on env settings
+ //let auth;
+ let initError = false;
+ let conversation;
+ 
+ try {
+   //auth = getAuthenticatorFromEnvironment('CONVERSATION');
+ 
+   conversation = new AssistantV1({
+     version: '2022-01-10',
+     authenticator: new IamAuthenticator({
+       apikey: process.env.CONVERSATION_IAM_APIKEY,
+     }),
+     serviceUrl: process.env.CONVERSATION_URL,
+   });
+ 
+   var conversationSetup = new WatsonConversationSetup(conversation);
+ 
+   // handle issue with proper syntax of json file
+   // Assistant tooling for export uses 'dialog_nodes', but SDK requires 'dialogNodes'
+   var workspaceJson = JSON.parse(fs.readFileSync('data/watson-pizzeria.json'));
+   if ('dialog_nodes' in workspaceJson && !('dialogNodes' in workspaceJson)) {
+     workspaceJson.dialogNodes = workspaceJson.dialog_nodes;
+   }
+   var conversationSetupParams = { default_name: DEFAULT_NAME, workspace_json: workspaceJson };
+   conversationSetup.setupConversationWorkspace(conversationSetupParams, (err, data) => {
+     if (err) {
+       //handleSetupError(err);
+       console.log('Setup Error: ' + err);
+     } else {
+       console.log('Assistant is ready!');
+       workspaceID = data;
+     }
+   });
+ } catch (e) {
+   console.log('Assistant initialization error: ' + e);
+   if (failOnMissingCredentials) {
+     throw(e);
+   } else {
+     console.log('Will continue with limited functionality');
+     initError = true;
+   }
+ }
+ 
+ // Endpoint to be call from the client side
+ app.post('/api/message', async (req, res) => {
+ 
+   if (initError) {
+     return res.json({
+       output: {
+         text: 'Watson Assistant credentials are invalid. Please add/verify them and try again.'
+       }
+     });
+   }
+   else if (!workspaceID) {
+     return res.json({
+       output: {
+         text: 'Assistant initialization in progress. Please try again.'
+       }
+     });
+   }
+ 
+   var payload = {
+     workspaceId: process.env.WORKSPACE_ID,
+     context: req.body.context || {},
+     input: req.body.input || {}
+   };
+   // Send the input to the conversation service
+   let result = await conversation.message(payload);
+   if (result.status != 200) {
+       return res.status(result.status || 500).json(result.statusText);
+   }
+   return res.json(updateMessage(payload, result));
+ });
+ 
+ /**
+  * Updates the response text using the intent confidence
+  * @param  {Object} input The request to the Assistant service
+  * @param  {Object} response The response from the Assistant service
+  * @return {Object}          The response with the updated message
+  */
+ function updateMessage(input, response) {
+   var responseText = null;
+   var result = response.result;
+   if (!result.output) {
+     result.output = {};
+   } else {
+     return result;
+   }
+   if (result.intents && result.intents[0]) {
+     var intent = result.intents[0];
+     // Depending on the confidence of the response the app can return different messages.
+     // The confidence will vary depending on how well the system is trained. The service will always try to assign
+     // a class/intent to the input. If the confidence is low, then it suggests the service is unsure of the
+     // user's intent . In these cases it is usually best to return a disambiguation message
+     // ('I did not understand your intent, please rephrase your question', etc..)
+     if (intent.confidence >= 0.75) {
+       responseText = 'I understood your intent was ' + intent.intent;
+     } else if (intent.confidence >= 0.5) {
+       responseText = 'I think your intent was ' + intent.intent;
+     } else {
+       responseText = 'I did not understand your intent';
+     }
+   }
+   result.output.text = responseText;
+   return result;
+ }
+ 
+ module.exports = app;
+ 
